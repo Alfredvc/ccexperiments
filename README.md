@@ -9,6 +9,13 @@ bust the cache. Every claim in the list below is backed by a runnable test
 in `tests/` that reads the transcript JSONL and inspects
 `cache_creation_input_tokens` / `cache_read_input_tokens`.
 
+## TL;DR
+
+| | Rule | Detail |
+|---|------|--------|
+| DO | Use `/clear` to reset context | Preserves server-side cache. Restarting claude costs up to ~29k fresh write tokens on first occurrence. |
+| DON'T | Edit files under `.claude/skills/` or `.claude/commands/` mid-session | Any change to the 4 watched config dirs forces a cache miss on the next turn (~600–1000 extra write tokens). |
+
 ---
 
 ## Rules of the ledger
@@ -127,7 +134,71 @@ analyze:
 
 ## Don'ts
 
-*(empty — add entries as tests land)*
+### DON'T: Edit files under `.claude/skills/` or `.claude/commands/` mid-session
+
+Modifying any file in the four chokidar-watched config directories forces
+a measurable `cache_creation_input_tokens` spike on the next turn —
+even appending a single line. The invalidation is one-shot: the turn
+after the probe returns to baseline.
+
+The four watched directories:
+- `~/.claude/skills/` (user skills)
+- `~/.claude/commands/` (user commands)
+- `<cwd>/.claude/skills/` (project skills)
+- `<cwd>/.claude/commands/` (project commands)
+
+**Tests:** `tests/watched-dir-edit-invalidates-cache.js` (parametric)
+- `npm run test:user-skills-edit-invalidates-cache`
+- `npm run test:user-commands-edit-invalidates-cache`
+- `npm run test:project-skills-edit-invalidates-cache`
+- `npm run test:project-commands-edit-invalidates-cache`
+- `npm run test:all-watched-dirs` (runs all four in parallel)
+
+**Why (mechanism):** All four directories are watched by
+`skillChangeDetector` via chokidar (`docs/cache-clearing.md` line 152).
+Any file change fires `scheduleReload()` → `clearSkillCaches()` +
+`clearCommandsCache()` + `resetSentSkillNames()` (line 148).
+`resetSentSkillNames()` causes the `skill_listing` attachment to be
+re-emitted on the next user turn (lines 227–233), changing the request
+bytes and forcing a cache miss on the portion after the last cache
+breakpoint.
+
+**Caveat:** Watchers only register on directories that exist at process
+startup (`docs/cache-clearing.md` line 156). If a dir is created
+mid-session, edits to it won't trigger invalidation until the next
+restart.
+
+**Measured effect:** All four directories confirmed. Typical probe delta
+vs control max: 600–1000 `cache_creation_input_tokens`. Negative control
+(touching `/tmp/nonwatched-probe.md`) stays within threshold. Post-probe
+turn returns to baseline (one-shot invalidation).
+
+#### Pseudocode — `watched-dir-edit-invalidates-cache.js`
+
+```
+session = spawn_claude()
+wait_until_ready()
+
+t1 = send(prompt); measure                          # warm prefix
+
+t2 = send(prompt); measure                          # control
+t3 = send(prompt); measure                          # control
+t4 = send(prompt); measure                          # control
+controlMax = max(t2.write, t3.write, t4.write)
+
+write /tmp/nonwatched-probe.md                      # negative control
+sleep(1.5s)                                         # let chokidar settle
+t5 = send(prompt); measure
+assert t5.write - controlMax < 100                  # non-watched write doesn't invalidate
+
+append text to <target>                             # PROBE: watched dir file
+sleep(1.5s)
+t6 = send(prompt); measure
+assert t6.write - controlMax > 100                  # CLAIM: forces cache_creation
+
+t7 = send(prompt); measure                          # post-probe control
+assert t7.write - controlMax < 100                  # one-shot: back to baseline
+```
 
 ### Entry template
 
@@ -149,11 +220,16 @@ analyze:
 ## How to run
 
 ```
-npm run build                           # build docker image
-npm run auth                            # one-time: log into claude inside container
+npm run build                                       # build docker image
+npm run auth                                        # one-time: log into claude inside container
 npm run test:clear-command-clears-cache
 npm run test:clear-vs-new-session
-npm run start                           # drop into a container shell
+npm run test:user-skills-edit-invalidates-cache
+npm run test:user-commands-edit-invalidates-cache
+npm run test:project-skills-edit-invalidates-cache
+npm run test:project-commands-edit-invalidates-cache
+npm run test:all-watched-dirs                       # all four in parallel
+npm run start                                       # drop into a container shell
 ```
 
 See `CLAUDE.md` §"How It Works" for harness architecture
