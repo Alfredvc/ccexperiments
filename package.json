@@ -1,0 +1,22 @@
+{
+  "name": "claude-code-caching",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "docker build -t claude-caching-test .",
+    "auth": "mkdir -p volume/.claude && docker run -it --rm -v $(pwd)/volume/.claude:/root/.claude claude-caching-test claude",
+    "clean:volume": "rm -rf volume/.claude && mkdir -p volume/.claude",
+    "start": "docker run -it --rm -v $(pwd)/volume/.claude:/auth:ro -v $(pwd)/tests:/app/tests -v $(pwd)/lib:/app/lib claude-caching-test bash",
+    "test:clear-command-clears-cache": "docker run --rm -v $(pwd)/volume/.claude:/auth:ro -v $(pwd)/tests:/app/tests -v $(pwd)/lib:/app/lib claude-caching-test node tests/clear-command-clears-cache.js",
+    "test:clear-vs-new-session": "docker run --rm -v $(pwd)/volume/.claude:/auth:ro -v $(pwd)/tests:/app/tests -v $(pwd)/lib:/app/lib claude-caching-test node tests/clear-vs-new-session.js",
+    "test:user-skills-edit-invalidates-cache":      "docker run --rm -v $(pwd)/volume/.claude:/auth:ro -v $(pwd)/tests:/app/tests -v $(pwd)/lib:/app/lib -v $(pwd)/fixtures:/fixtures:ro claude-caching-test node tests/watched-dir-edit-invalidates-cache.js --target /root/.claude/skills/probe-1.md --label user-skills",
+    "test:user-commands-edit-invalidates-cache":    "docker run --rm -v $(pwd)/volume/.claude:/auth:ro -v $(pwd)/tests:/app/tests -v $(pwd)/lib:/app/lib -v $(pwd)/fixtures:/fixtures:ro claude-caching-test node tests/watched-dir-edit-invalidates-cache.js --target /root/.claude/commands/probe-1.md --label user-commands",
+    "test:project-skills-edit-invalidates-cache":   "docker run --rm -v $(pwd)/volume/.claude:/auth:ro -v $(pwd)/tests:/app/tests -v $(pwd)/lib:/app/lib -v $(pwd)/fixtures:/fixtures:ro claude-caching-test node tests/watched-dir-edit-invalidates-cache.js --target /workspace/.claude/skills/probe-1.md --label project-skills",
+    "test:project-commands-edit-invalidates-cache": "docker run --rm -v $(pwd)/volume/.claude:/auth:ro -v $(pwd)/tests:/app/tests -v $(pwd)/lib:/app/lib -v $(pwd)/fixtures:/fixtures:ro claude-caching-test node tests/watched-dir-edit-invalidates-cache.js --target /workspace/.claude/commands/probe-1.md --label project-commands",
+    "test:all-watched-dirs": "node tests/run-all-watched.js"
+  },
+  "dependencies": {
+    "chokidar": "^3.6.0",
+    "node-pty": "^1.0.0"
+  }
+}
