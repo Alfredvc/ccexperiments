@@ -45,13 +45,20 @@
  */
 
 const fs = require('fs');
+const { randomUUID } = require('crypto');
 const { spawnSession } = require('../lib/session');
 const { createWatcher } = require('../lib/transcript');
+const { assertVersionMatch } = require('../lib/version');
 
 const NONWATCHED_PATH = '/tmp/nonwatched-probe.md';
-const PROMPT = 'Reply with exactly: OK';
+// Per-run UUID — guarantees server cache cold on turn 1 so within-run
+// turn 2+ measurements are uncontaminated by prior runs' bytes.
+const NONCE = randomUUID();
+const PROMPT = `Reply with exactly: OK ${NONCE}`;
 const DELTA_THRESHOLD = 100;
-const CHOKIDAR_WAIT_MS = 1500;
+const CHOKIDAR_WAIT_MS = process.env.CCEXP_PROBE_WAIT_MS
+  ? Number(process.env.CCEXP_PROBE_WAIT_MS)
+  : 1500;
 
 function parseArgs(argv) {
   const args = { target: null, label: null };
@@ -122,7 +129,9 @@ function max(xs)  { return xs.reduce((a, b) => a > b ? a : b, -Infinity); }
 
 async function run() {
   const { target, label } = parseArgs(process.argv.slice(2));
-  console.log(`=== claim [${label}]: "editing ${target} mid-session forces cache_creation on the next turn" ===\n`);
+  const ccVersion = assertVersionMatch();
+  console.log(`=== claim [${label}]: "editing ${target} mid-session forces cache_creation on the next turn" (CC v${ccVersion}) ===`);
+  console.log(`Per-run nonce: ${NONCE}\n`);
 
   verifyFixtures(target);
 
@@ -133,8 +142,13 @@ async function run() {
   await waitForQuiet(session, 2000, 45_000);
   console.log('--- Ready ---\n');
 
-  console.log('Turn 1: warm prefix');
+  console.log('Turn 1: warm prefix (nonce ensures fresh user-msg bytes)');
   const t1 = await sendTurn(session, watcher, 'turn1');
+  if (t1.cacheWrite === 0) {
+    throw new Error(
+      `Pre-condition failed: expected cacheWrite > 0 on turn 1 (nonce should force fresh user-msg bytes), got cacheWrite=${t1.cacheWrite}. Harness misconfigured.`
+    );
+  }
 
   console.log('\nTurns 2-4: CONTROL (no file change)');
   const t2 = await sendTurn(session, watcher, 'turn2');
@@ -178,6 +192,7 @@ async function run() {
     `return-to-baseline: turn7 within ${DELTA_THRESHOLD} of controlMax (delta=${returnDelta}) — invalidation is one-shot`);
 
   console.log('\n=== SUMMARY ===');
+  console.log(`  cc_version:  ${ccVersion}`);
   console.log(`  label:       ${label}`);
   console.log(`  target:      ${target}`);
   console.log(`  turn1 warm:          write=${t1.cacheWrite} read=${t1.cacheRead}`);

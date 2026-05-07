@@ -9,9 +9,20 @@ RUN npm install
 
 # Stage 2: runtime
 FROM node:22-slim
-# Install claude CLI globally
-RUN npm install -g @anthropic-ai/claude-code \
-    && rm -rf /root/.npm
+
+# Pinned Claude Code version. Bump intentionally; never float.
+# All findings in README must cite a specific version (this one or a documented prior).
+ARG CC_VERSION=2.1.132
+ENV CC_VERSION=${CC_VERSION}
+
+# Install claude CLI via the official native script (recommended path).
+# Native install drops the binary at /root/.local/bin/claude.
+# `bash -s <ver>` pins to a specific version per https://claude.ai/install.sh.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL https://claude.ai/install.sh | bash -s "${CC_VERSION}"
+ENV PATH=/root/.local/bin:${PATH}
 
 WORKDIR /app
 COPY --from=builder /app/node_modules ./node_modules

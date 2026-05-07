@@ -36,16 +36,19 @@ Tests run inside Docker to get a clean `~/.claude` each time. The `volume/.claud
 ### Architecture
 
 ```
-Dockerfile          — two-stage build: native deps (node-pty) + runtime (claude CLI)
+Dockerfile          — two-stage build: native deps (node-pty) + runtime (pinned claude CLI via official native installer)
 entrypoint.sh       — copies auth from /auth mount into /root/.claude, promotes claude.json
 package.json        — node-pty dependency, docker-oriented npm scripts
 lib/session.js      — spawns interactive claude via node-pty, exposes send/onData/close
 lib/transcript.js   — locates and parses ~/.claude/projects/**/*.jsonl transcript files
+lib/version.js      — reads `claude --version` and asserts it matches CC_VERSION env (no JSONL trust)
 tests/              — experiment scripts that combine session + transcript watching
 docs/               — reference documentation (cache-clearing architecture from source reading)
 volume/.claude/     — host-side auth credentials (gitignored)
 settings.json       — Claude Code settings for THIS project (not used inside Docker)
 ```
+
+The Dockerfile installs claude via `curl -fsSL https://claude.ai/install.sh | bash -s ${CC_VERSION}` (recommended path per the official setup docs), pinned by `ARG CC_VERSION`. Binary lands at `/root/.local/bin/claude`, which is added to `PATH`. Bumping the version is one-line edit + rebuild + rerun.
 
 ### lib/session.js
 
@@ -69,53 +72,77 @@ Backs the ledger DO *"Use `/clear` to reset context; don't restart"*
 cache"* against the **server-side prompt cache** (the billing-relevant
 one) — claim is REJECTED.
 
-Three turns:
-1. **Turn 1** (informational): logged, not asserted — see caveat below.
-2. **Turn 2** (warm baseline, same session): assert `cache_read > 0`
-3. **`/clear`** then **Turn 3**: assert `cache_read > 0` AND
-   `cache_read < turn2.cache_read`. Rationale: `/clear` only resets
-   in-memory client state (`clearSessionCaches()` — see
-   `docs/cache-clearing.md`). It never calls the API, so server-side KV
-   entries survive. The system prompt and `prependUserContext`
+Three turns. The user prompt is `Reply with exactly: OK ${randomUUID()}`
+— per-run UUID nonce ensures fresh user-message bytes per run.
+
+1. **Turn 1**: assert `cacheWrite > 0` (harness sanity — confirms the
+   nonce produced previously-unseen user-msg bytes; not a claim test).
+2. **Turn 2** (warm baseline, same session): assert `cache_read > 0`.
+3. **`/clear`** then **Turn 3**: assert `cache_read > 0` (the headline).
+   `/clear` only resets in-memory client state (`clearSessionCaches()` —
+   see `docs/cache-clearing.md`). It never calls the API, so server-side
+   KV entries survive. The system prompt and `prependUserContext`
    (CLAUDE.md + currentDate) recompute to byte-identical content on the
-   next turn, so the prefix still hits. Conversation messages are wiped
-   client-side, so the message-level portion of the prefix no longer
-   contributes — hence `< turn2.cache_read`.
+   next turn, so the prefix still hits.
 
-Verdict: claim is **rejected** for the server-side cache. Observed
-post-/clear `cache_read` was ~96% of the warm baseline, confirming the
-system-prompt + CLAUDE.md prefix survived intact.
+Logged informationally (not asserted): `(t2.cacheRead - t3.cacheRead) /
+t2.cacheRead` as drop %. Older CC versions exhibited a clean ~20% drop
+post-/clear (in-session conversation messages dropped from the cached
+prefix). On v2.1.132 the sub-effect's magnitude varies; we don't model
+it, just record.
 
-**Caveat — no such thing as a "cold" turn 1 across runs.** The Anthropic
-server-side cache is org-scoped and keyed on request bytes, not on
-client identity or `~/.claude` state. A docker container with an empty
-`~/.claude` still hits cache entries written by prior runs (same auth,
-same system prompt, same CLAUDE.md, same prompt text) as long as the
-5-min TTL hasn't expired. First observed in run at 2026-04-14:
-`turn 1 cache_read = 29592, cache_write = 0`. Future tests that need a
-truly cold baseline must either wait past TTL or vary request bytes
-(e.g. unique nonce in the prompt).
+Verdict: claim *"`/clear` clears the (server-side) cache"* is
+**rejected** for the server-side cache. Observed post-/clear
+`cache_read` is the same order as the warm baseline (≥23k on v2.1.132).
+
+**Caveat — what the nonce DOES and DOESN'T control.** Per-run UUID is
+embedded only in the user message, which is *after* the cache breakpoint.
+So the nonce guarantees fresh user-msg bytes (`cacheWrite > 0`), but
+does NOT cold-start the prefix. The system prompt + tools + CLAUDE.md
+are unchanged across runs; if any prior run sent identical prefix bytes
+within the 5-min TTL, turn 1's `cacheRead` will be > 0. To genuinely
+cold-start the prefix you must vary prefix bytes (e.g. edit CLAUDE.md)
+or wait past TTL. The pre-cond `cacheWrite > 0` is the strongest
+deterministic signal achievable from the user-side.
 
 Uses `waitForQuiet()` (PTY output stops changing for N ms) to detect when
 claude finishes responding.
 
+### tests/diag-post-clear.js, tests/diag-multi-spawn.js
+
+Diagnostic scripts (not assertion tests). Used during the v2.1.132
+re-validation effort to figure out (a) why post-/clear `nextTurn()`
+intermittently timed out and (b) whether claude rotates the JSONL on
+every spawn. They dump chokidar events, dir state, and PTY output. Keep
+as a template if a future CC version causes similar flakes.
+
 ### tests/clear-vs-new-session.js
 
 Backs the same ledger DO. Runs 3 cycles back-to-back in one docker
-container:
+container. Per-run UUID nonce, constant across the 3 cycles within a
+single run (same prompt bytes each cycle):
 
 - Each cycle spawns **session A** (turn1 + turn2 warm baseline + `/clear`
   + turn3 post-clear), closes it, then spawns a fresh **session B**
   (new process, same auth/CLAUDE.md) and measures turn1.
-- Reports a per-cycle table and pattern-matches the verdict:
-  - All A.turn3 hit, all B.turn1 miss → restart bytes are process-unique (worst).
-  - B.turn1 misses cycle 1, hits 2+3 → restart bytes stable but differ from `/clear` bytes (first restart pays, rest free).
-  - All hit → equivalent after warmup.
+- Cycle 1 only: assert `A.turn1.cacheWrite > 0` (harness pre-cond —
+  confirms the nonce produced fresh user-msg bytes).
+- Reports a per-cycle table; verdict pattern-matched from columns.
 
-Observed on 2026-04-14 (see README table): B.turn1 missed in cycle 1
-(write=29702) then hit in cycles 2 and 3 (read=29785, write=0). A.turn3
-hit every cycle (write 0–1411). Confirms `/clear` is strictly cheaper
-than restart on the first occurrence.
+Observed on 2026-04-14 (CC version not pinned at the time): B.turn1
+missed in cycle 1 (write=29702) then hit in cycles 2 and 3 (read=29785,
+write=0). A.turn3 hit every cycle (write 0–1411). Motivated the
+original "`/clear` is strictly cheaper than restart on the first
+occurrence" finding.
+
+Re-run on v2.1.132, 2026-05-07 (with per-run nonce harness): cycle 1
+shows the gap reduced but still present — A.turn3 wrote 5351, B.turn1
+wrote 5777 (Δ ≈ 426 in `/clear`'s favor). Cycle 2: A.turn3 wrote 5881,
+B.turn1 wrote 0 (read 28808 — fully cached from cycle 1). Cycle 3: both
+hit fully. Headline directionally matches the historical baseline (`/clear`
+cheaper than restart on first occurrence) but at a much smaller
+magnitude (~5–6k full-prefix-rewrite tokens, not the ~29k of the older
+data). README has both tables side-by-side.
 
 ### Test-writing rules for new ledger entries
 
@@ -125,11 +152,33 @@ Every new test must:
 - Cite the mechanism in `docs/caching-system.md` or
   `docs/cache-clearing.md` so the expected direction has a reason, not a
   guess.
+- **Pin and verify the Claude Code version.** Call
+  `assertVersionMatch()` from `lib/version.js` at the start of `run()`. It
+  shells out to `claude --version`, compares to `CC_VERSION` (set via
+  `ARG`/`ENV` in the Dockerfile), and hard-fails on drift. Print the version
+  in the test header and final verdict so the captured stdout is
+  self-describing.
 - Produce PASS/FAIL suitable for the README ledger (dos / don'ts).
+- The README ledger entry must include a **Tested on:** line citing the
+  exact CC version that produced the numbers. No version, no claim.
+
+### Pinning the Claude Code version
+
+- `Dockerfile` has `ARG CC_VERSION=<x.y.z>` and installs via the official
+  native installer (`curl -fsSL https://claude.ai/install.sh | bash -s
+  ${CC_VERSION}`) into `/root/.local/bin/claude`. Bump the ARG, rebuild, and
+  rerun all ledger tests when adopting a new version. Don't float to latest.
+- `lib/version.js` reads the binary at runtime via `claude --version`. JSONL
+  `version` fields are *not* used as the source of truth — they describe what
+  the binary wrote, but a drift check needs the binary itself before any API
+  call has happened.
 
 ## Known Issues / Fragility
 
-- **Session ID not tracked** — the watcher doesn't know which JSONL file belongs to its session. It infers "our file" by excluding pre-existing files and accepting the first new one. Works for single-session containers but would break with concurrent sessions. Could extract session ID from the JSONL filename after it appears.
+- **Session ID not tracked** — the watcher doesn't know which JSONL file belongs to its session. It infers "our file" by excluding pre-existing files (snapshot at `createWatcher()` time) and accepting the first new one. CC v2.1.132 rotates the JSONL on every spawn AND on every `/clear`, so the heuristic works for the cycle-based tests; it would break with concurrent sessions inside a single watcher. Could extract session ID from the JSONL filename after it appears.
+- **OAuth refresh-token rotation kills sequential containers.** The volume mount `volume/.claude:/auth:ro` is read-only by design (per-run isolation). Inside a container, claude refreshes its access token using the host's `refreshToken`; rotation invalidates the old `refreshToken` server-side. Subsequent docker-runs start with the now-invalidated token and fail with HTTP 401 / `"Please run /login"`. Mitigation today: run `npm run auth` to refresh the host file whenever a sequence of tests starts to 401. Long-term: revisit the `:ro` design.
+- **Post-/clear async title-generation write to old JSONL.** v2.1.132 writes `last-prompt` and `ai-title` entries to the *old* JSONL after `/clear`. The watcher's `clearSnapshot` path used to accept any growth on the old file as the new active session; the title-gen write would lock `sessionFile` to the wrong file and stall on the next `nextTurn()`. Fixed by accepting only files whose path is new since `markClear()` (see `lib/transcript.js`).
+- **Server-side cache state leaks across tests.** The Anthropic prompt cache is org-scoped and TTL-based (~5 min). Running tests back-to-back means later tests see warm-cache state set up by earlier tests. To exercise a "cold" first turn, either wait > 5 min between tests or vary the prompt bytes (unique nonce). Currently no test does this — first-restart-cold findings cannot be reliably reproduced from a back-to-back run.
 - **`waitForQuiet` is heuristic** — detects "claude is done" by watching for PTY output to stabilize. Works but slow (1.5-2s quiet window). No better alternative without parsing ANSI output for specific UI patterns.
 
 ## Reference Documents

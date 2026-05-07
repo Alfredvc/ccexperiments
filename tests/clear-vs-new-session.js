@@ -28,10 +28,15 @@
  * the whole run (5 min default).
  */
 
+const { randomUUID } = require('crypto');
 const { spawnSession } = require('../lib/session');
 const { createWatcher } = require('../lib/transcript');
+const { assertVersionMatch } = require('../lib/version');
 
-const PROMPT = 'Reply with exactly: OK';
+// Per-run UUID — see clear-command-clears-cache.js. Guarantees cold
+// first turn on cycle 1 so the "first restart cold?" question is testable.
+const NONCE = randomUUID();
+const PROMPT = `Reply with exactly: OK ${NONCE}`;
 const CYCLES = 3;
 
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -70,6 +75,13 @@ async function runCycle(index) {
   await waitForQuiet(sessionA, 2000, 45_000);
 
   const a1 = await runTurn(sessionA, watcherA, 'A turn 1');
+  if (index === 1) {
+    if (a1.cacheWrite === 0) {
+      throw new Error(
+        `Pre-condition failed (cycle 1, A.turn1): expected cacheWrite > 0 (nonce should force fresh user-msg bytes), got cacheWrite=${a1.cacheWrite}. Harness misconfigured.`
+      );
+    }
+  }
   await waitForQuiet(sessionA);
   const a2 = await runTurn(sessionA, watcherA, 'A turn 2 (warm baseline)');
   await waitForQuiet(sessionA);
@@ -104,7 +116,10 @@ async function runCycle(index) {
 function fmt(n) { return String(n).padStart(7); }
 
 async function run() {
+  const ccVersion = assertVersionMatch();
   console.log('=== multi-cycle claim: "/clear ≡ new-session" ===');
+  console.log(`Claude Code version: ${ccVersion}`);
+  console.log(`Per-run nonce: ${NONCE}`);
   console.log(`Running ${CYCLES} cycles back-to-back in one container.\n`);
 
   const results = [];
