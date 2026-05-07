@@ -2,6 +2,7 @@
   "name": "claude-code-caching",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "build": "docker build -t claude-caching-test .",
     "auth": "mkdir -p volume/.claude && docker run -it --rm -v $(pwd)/volume/.claude:/root/.claude claude-caching-test claude",

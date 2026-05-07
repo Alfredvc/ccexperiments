@@ -363,3 +363,9 @@ Code's caching internals:
   where markers go, all 11 invalidation dimensions.
 - `docs/cache-clearing.md` — client-side in-memory caches (plugins, commands,
   skills, agents): what each holds and what clears it.
+
+---
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
