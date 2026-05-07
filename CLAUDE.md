@@ -2,20 +2,22 @@
 
 ## Purpose
 
-Experimental harness that produces a **tested, repeatable dos-and-don'ts
-ledger** for Claude Code cache optimization. Subscriptions bill on total
-tokens; cached reads cost ~10% of fresh writes, so cache hygiene is cost
-hygiene.
+Systematic, reproducible framework for testing and validating hypotheses about
+Claude Code behavior. Runs experiments in Docker-isolated containers, collects
+ground-truth data from transcript JSONL, and produces PASS/FAIL verdicts.
+
+Current focus: prompt cache behavior (cost optimization). The harness is
+general-purpose — any hypothesis about Claude Code's interactive behavior that
+can be measured from transcript JSONL is testable here.
 
 Scope:
 
-1. **Test claims.** Every entry in the README ledger must be backed by a
-   script in `tests/` that inspects `cache_creation_input_tokens` /
-   `cache_read_input_tokens` in transcript JSONL and produces PASS/FAIL.
+1. **Test claims.** Every finding in the README must be backed by a script in
+   `tests/` that inspects transcript JSONL fields and produces PASS/FAIL.
 2. **Validate mechanisms.** Tests cite `docs/caching-system.md` or
-   `docs/cache-clearing.md` so predictions have a reason.
-3. **Publish findings.** The README ledger (dos / don'ts) is the
-   user-facing deliverable.
+   `docs/cache-clearing.md` so the expected direction has a documented reason.
+3. **Publish findings.** The README findings section is the user-facing
+   deliverable.
 
 See `README.md` for the ledger and test template.
 
