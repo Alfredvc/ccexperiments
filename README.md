@@ -90,9 +90,6 @@ console.assert(t2.cacheRead > 0, 'expected cache hit on warm baseline');
   `cache_read`) are unchanged across runs and remain warm from prior org
   activity. To genuinely cold-start the prefix you must either wait past the
   5-min TTL or vary the prefix bytes (e.g. edit CLAUDE.md).
-- **Cite the mechanism.** Every assertion should reference `docs/caching-system.md`
-  or `docs/cache-clearing.md` so the expected direction has a documented reason,
-  not a guess.
 - **Produce a measurable, binary verdict.** PASS/FAIL with concrete numbers from
   the run.
 
@@ -103,7 +100,7 @@ console.assert(t2.cacheRead > 0, 'expected cache hit on warm baseline');
 
 - **Test(s):** `tests/<file>.js` — `npm run test:<script>`
 - **Tested on:** Claude Code v<x.y.z> (matches `CC_VERSION` in Dockerfile)
-- **Why:** <one-line mechanism; cite docs/>
+- **Why:** <one-line mechanism>
 - **Measured effect:** <concrete numbers from a run>
 
 #### Pseudocode
@@ -161,8 +158,7 @@ prefix is shared across runs and may already be cached server-side from
 prior org activity — `cache_read` on turn 1 reflects that prior state.
 
 **Why (mechanism):** `/clear` runs `clearSessionCaches()` — in-memory client
-state only (see `docs/cache-clearing.md`). It never calls the API, so
-server-side KV entries survive. The system prompt and `prependUserContext`
+state only. It never calls the API, so server-side KV entries survive. The system prompt and `prependUserContext`
 (CLAUDE.md + currentDate) recompute to byte-identical content on the next
 turn, so the prefix still hits. The conversation message list IS wiped
 client-side, so the post-`/clear` request body is shorter than the
@@ -270,8 +266,7 @@ any file edit. **On Claude Code v2.1.132 this no longer holds.** All four
 test scripts FAIL their probe assertion: the probe-turn `cacheWrite` is
 within ±10 of the control mean, well below the 100-token threshold.
 
-The four directories that *were* watched (per `docs/cache-clearing.md` line
-152):
+The four directories that *were* watched:
 - `~/.claude/skills/` (user skills)
 - `~/.claude/commands/` (user commands)
 - `<cwd>/.claude/skills/` (project skills)
@@ -356,13 +351,7 @@ assert t7.write - controlMax < 100                  # one-shot: back to baseline
 
 ## Architecture
 
-See `CLAUDE.md` for harness internals and `docs/` for reference docs on Claude
-Code's caching internals:
-
-- `docs/caching-system.md` — server-side API prompt cache: what gets cached,
-  where markers go, all 11 invalidation dimensions.
-- `docs/cache-clearing.md` — client-side in-memory caches (plugins, commands,
-  skills, agents): what each holds and what clears it.
+See `CLAUDE.md` for harness internals.
 
 ---
 

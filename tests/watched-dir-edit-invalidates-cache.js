@@ -6,7 +6,7 @@
  *    between turns within a single session forces measurable
  *    cache_creation_input_tokens on the next turn, beyond a no-op control."
  *
- * The four watched dirs per docs/cache-clearing.md line 152:
+ * The four watched dirs:
  *   ~/.claude/skills/          — "user-skills"
  *   ~/.claude/commands/        — "user-commands"
  *   <cwd>/.claude/skills/      — "project-skills"
@@ -25,7 +25,7 @@
  *   fixtures/project-commands/    → /workspace/.claude/commands/     (5 commands)
  *   fixtures/CLAUDE.md            → /workspace/CLAUDE.md
  * All four dirs exist at claude startup so chokidar watchers register on
- * each (caveat at docs/cache-clearing.md line 156).
+ * each.
  *
  * Usage:
  *   node watched-dir-edit-invalidates-cache.js --target <abs-path-to-file> --label <label>

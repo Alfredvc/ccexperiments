@@ -14,9 +14,7 @@ Scope:
 
 1. **Test claims.** Every finding in the README must be backed by a script in
    `tests/` that inspects transcript JSONL fields and produces PASS/FAIL.
-2. **Validate mechanisms.** Tests cite `docs/caching-system.md` or
-   `docs/cache-clearing.md` so the expected direction has a documented reason.
-3. **Publish findings.** The README findings section is the user-facing
+2. **Publish findings.** The README findings section is the user-facing
    deliverable.
 
 See `README.md` for the ledger and test template.
@@ -43,7 +41,6 @@ lib/session.js      — spawns interactive claude via node-pty, exposes send/onD
 lib/transcript.js   — locates and parses ~/.claude/projects/**/*.jsonl transcript files
 lib/version.js      — reads `claude --version` and asserts it matches CC_VERSION env (no JSONL trust)
 tests/              — experiment scripts that combine session + transcript watching
-docs/               — reference documentation (cache-clearing architecture from source reading)
 volume/.claude/     — host-side auth credentials (gitignored)
 settings.json       — Claude Code settings for THIS project (not used inside Docker)
 ```
@@ -79,11 +76,10 @@ Three turns. The user prompt is `Reply with exactly: OK ${randomUUID()}`
    nonce produced previously-unseen user-msg bytes; not a claim test).
 2. **Turn 2** (warm baseline, same session): assert `cache_read > 0`.
 3. **`/clear`** then **Turn 3**: assert `cache_read > 0` (the headline).
-   `/clear` only resets in-memory client state (`clearSessionCaches()` —
-   see `docs/cache-clearing.md`). It never calls the API, so server-side
-   KV entries survive. The system prompt and `prependUserContext`
-   (CLAUDE.md + currentDate) recompute to byte-identical content on the
-   next turn, so the prefix still hits.
+   `/clear` only resets in-memory client state (`clearSessionCaches()`).
+   It never calls the API, so server-side KV entries survive. The system
+   prompt and `prependUserContext` (CLAUDE.md + currentDate) recompute to
+   byte-identical content on the next turn, so the prefix still hits.
 
 Logged informationally (not asserted): `(t2.cacheRead - t3.cacheRead) /
 t2.cacheRead` as drop %. Older CC versions exhibited a clean ~20% drop
@@ -149,9 +145,6 @@ data). README has both tables side-by-side.
 Every new test must:
 - Map a claim to a specific assertion on `cache_creation_input_tokens` /
   `cache_read_input_tokens` (the only ground truth).
-- Cite the mechanism in `docs/caching-system.md` or
-  `docs/cache-clearing.md` so the expected direction has a reason, not a
-  guess.
 - **Pin and verify the Claude Code version.** Call
   `assertVersionMatch()` from `lib/version.js` at the start of `run()`. It
   shells out to `claude --version`, compares to `CC_VERSION` (set via
@@ -180,8 +173,3 @@ Every new test must:
 - **Post-/clear async title-generation write to old JSONL.** v2.1.132 writes `last-prompt` and `ai-title` entries to the *old* JSONL after `/clear`. The watcher's `clearSnapshot` path used to accept any growth on the old file as the new active session; the title-gen write would lock `sessionFile` to the wrong file and stall on the next `nextTurn()`. Fixed by accepting only files whose path is new since `markClear()` (see `lib/transcript.js`).
 - **Server-side cache state leaks across tests.** The Anthropic prompt cache is org-scoped and TTL-based (~5 min). Running tests back-to-back means later tests see warm-cache state set up by earlier tests. To exercise a "cold" first turn, either wait > 5 min between tests or vary the prompt bytes (unique nonce). Currently no test does this — first-restart-cold findings cannot be reliably reproduced from a back-to-back run.
 - **`waitForQuiet` is heuristic** — detects "claude is done" by watching for PTY output to stabilize. Works but slow (1.5-2s quiet window). No better alternative without parsing ANSI output for specific UI patterns.
-
-## Reference Documents
-
-- **`docs/caching-system.md`** — exhaustive reference on the API-level prompt cache: what gets cached (system prompt composition, tool schemas, CLAUDE.md injection, attachments), where cache breakpoints are placed, all 11 tracked invalidation dimensions, the pre-API message rewriting pipeline, compaction flows, and edge cases. Cites source file paths in `../claude-code/src/`.
-- **`docs/cache-clearing.md`** — reference on Claude Code's internal **in-memory caches** (plugin manifests, command memoizes, skill indexes, agent definitions): what each cache holds, every trigger that clears it, and the full `clearAllCaches()` / `clearSessionCaches()` / `clearCommandsCache()` hierarchies. Complements `caching-system.md` — the in-memory caches feed into what's sent to the API, but are a separate layer from the server-side prompt cache.

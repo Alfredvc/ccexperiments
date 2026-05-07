@@ -8,8 +8,7 @@
  * for subscription $ — cache_read_input_tokens is ~10% the cost of
  * cache_creation_input_tokens.
  *
- * What the docs say (see docs/caching-system.md §6.4, §7.4,
- * docs/cache-clearing.md `clearSessionCaches()`):
+ * Mechanism:
  *   - /clear invokes clearSessionCaches() which resets in-memory,
  *     client-side state: getUserContext (CLAUDE.md+date), getSystemContext
  *     (git), command/skill/agent caches, prompt-cache-break detection,
